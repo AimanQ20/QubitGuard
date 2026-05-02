@@ -69,3 +69,34 @@ def test_simulate_rejects_num_qubits_below_min():
         },
     )
     assert response.status_code == 422
+
+
+def test_simulate_rejects_channel_noise_not_below_threshold():
+    response = client.post(
+        "/api/simulate",
+        json={
+            "num_qubits": 100,
+            "eve_present": False,
+            "qber_threshold": 0.11,
+            "channel_noise_rate": 0.11,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_simulate_with_channel_noise_below_threshold_returns_success():
+    response = client.post(
+        "/api/simulate",
+        json={
+            "num_qubits": 300,
+            "eve_present": False,
+            "qber_threshold": 0.11,
+            "channel_noise_rate": 0.06,
+            "seed": 7,
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["channel_noise_rate"] == 0.06
+    assert data["attack_detected"] is False
+    assert data["qber"] < data["qber_threshold"]

@@ -8,7 +8,7 @@
  *   - Run history log
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import QubitTable   from "./components/QubitTable";
 import QBERChart    from "./components/QBERChart";
 import ResultsPanel from "./components/ResultsPanel";
@@ -80,9 +80,20 @@ function ProtocolStep({ num, title, actor, desc, color }) {
 // ── Main App ────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const NOISE_EPS = 0.001;
   const [numQubits,      setNumQubits]      = useState(100);
   const [evePresent,     setEvePresent]     = useState(false);
   const [qberThreshold,  setQberThreshold]  = useState(0.11);
+  const [channelNoiseRate, setChannelNoiseRate] = useState(0);
+
+  const maxChannelNoiseSim = useMemo(
+    () => Math.max(0, Number((qberThreshold - NOISE_EPS).toFixed(4))),
+    [qberThreshold],
+  );
+
+  useEffect(() => {
+    setChannelNoiseRate(prev => Math.min(prev, Math.max(0, qberThreshold - NOISE_EPS)));
+  }, [qberThreshold]);
   const [activeTab,      setActiveTab]      = useState("simulate");
   const [sweepCountsInput, setSweepCountsInput] = useState("10, 25, 50, 100, 200, 500, 1000");
   const [sweepRuns, setSweepRuns] = useState(5);
@@ -121,10 +132,15 @@ export default function App() {
       return;
     }
 
+    const maxNoiseSweep = Math.max(0, analysisThreshold - NOISE_EPS);
+    const sweepChannelNoise = Math.min(channelNoiseRate, maxNoiseSweep);
+
     const noEve = await runSweep({
       evePresent: false,
       qubitCounts: counts,
       runsPerCount: sweepRuns,
+      qberThreshold: analysisThreshold,
+      channelNoiseRate: sweepChannelNoise,
     });
     if (!noEve) {
       setAnalysisError("No-Eve sweep failed. Check backend logs and try again.");
@@ -135,6 +151,8 @@ export default function App() {
       evePresent: true,
       qubitCounts: counts,
       runsPerCount: sweepRuns,
+      qberThreshold: analysisThreshold,
+      channelNoiseRate: sweepChannelNoise,
     });
     if (!withEve) {
       setAnalysisError("With-Eve sweep failed. Check backend logs and try again.");
@@ -179,7 +197,12 @@ export default function App() {
     : 0;
 
   const handleSimulate = async () => {
-    const res = await runSimulation({ numQubits, evePresent, qberThreshold });
+    const res = await runSimulation({
+      numQubits,
+      evePresent,
+      qberThreshold,
+      channelNoiseRate,
+    });
     if (res) {
       fetchHistory();
       setActiveTab("results");
@@ -258,6 +281,20 @@ export default function App() {
                   min={0.01} max={0.5} step={0.01}
                   format={v => `${(v * 100).toFixed(0)}%`}
                 />
+
+                <SliderInput
+                  label="Channel noise (no Eve)"
+                  value={channelNoiseRate}
+                  onChange={(v) => setChannelNoiseRate(Math.min(Math.max(0, v), maxChannelNoiseSim))}
+                  min={0}
+                  max={maxChannelNoiseSim > 0 ? maxChannelNoiseSim : 0}
+                  step={maxChannelNoiseSim > 0 && maxChannelNoiseSim < 0.02 ? 0.001 : 0.005}
+                  format={(v) => `${(v * 100).toFixed(2)}% · max ${(maxChannelNoiseSim * 100).toFixed(2)}%`}
+                />
+                <p className="text-[10px] text-gray-500 leading-relaxed">
+                  Without Eve, QBER is capped below the threshold (~floor(rate×L)/L bits flipped).
+                  With Eve ON, noise adds random sifted-bit errors on top of the attack.
+                </p>
 
                 {/* Eve toggle */}
                 <div>
@@ -343,7 +380,9 @@ export default function App() {
                     desc="Via public classical channel, Alice and Bob announce (only) their bases. They keep only qubits where bases matched — ~50% of all qubits survive." />
                   <ProtocolStep num="5" actor="Alice + Bob" color="both"
                     title="QBER Estimation"
-                    desc="A sample of the sifted key is compared publicly. Error rate (QBER) is computed. Without Eve: ~0%. With Eve intercept-resend: ~25%." />
+                    desc={channelNoiseRate > 0 && !evePresent
+                      ? `QBER compares sifted strings. Noise-only mode: deterministic error count keeps QBER under your ${(qberThreshold * 100).toFixed(0)}% threshold. With Eve intercept-resend: typically ~25% plus extras.`
+                      : "A sample of the sifted key is compared publicly. Error rate (QBER) is computed. Without Eve and no noise: ~0%. With Eve intercept-resend: ~25%."} />
                   <ProtocolStep num="6" actor="Alice + Bob" color={evePresent ? "eve" : "both"}
                     title={evePresent ? "Key Rejection" : "Key Acceptance"}
                     desc={evePresent ? `QBER exceeds ${(qberThreshold*100).toFixed(0)}% threshold → key is rejected. Communication restarted on a new channel.` : `QBER below ${(qberThreshold*100).toFixed(0)}% threshold → key accepted. Final shared key derived via privacy amplification.`} />

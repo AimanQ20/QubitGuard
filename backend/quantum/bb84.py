@@ -68,6 +68,7 @@ class BB84Result:
         qber_threshold      : The threshold used for detection
         sifting_efficiency  : Fraction of qubits that survived sifting
         simulation_time_ms  : Wall-clock time for the simulation in milliseconds
+        channel_noise_rate  : Applied channel-noise parameter (honest-case QBER capped below threshold when Eve is off)
     """
     num_qubits: int
     alice_bits: list
@@ -89,6 +90,7 @@ class BB84Result:
     sifting_efficiency: float
     simulation_time_ms: float
     error_positions: list = field(default_factory=list)
+    channel_noise_rate: float = 0.0
 
 
 class BB84Protocol:
@@ -98,6 +100,11 @@ class BB84Protocol:
     Usage:
         proto = BB84Protocol(num_qubits=100, eve_present=True, qber_threshold=0.11)
         result = proto.run()
+
+    Without Eve and with channel_noise_rate < qber_threshold, QBER equals
+    floor(channel_noise_rate * L) / L for sifted length L — always strictly below
+    the intrusion threshold — modeling a realistic but honest noisy channel.
+
     """
 
     # QBER ≈ 25% expected when Eve uses intercept-resend (optimal for Eve).
@@ -110,6 +117,7 @@ class BB84Protocol:
         eve_present: bool = False,
         qber_threshold: float = DEFAULT_QBER_THRESHOLD,
         seed: Optional[int] = None,
+        channel_noise_rate: float = 0.0,
     ):
         if num_qubits < 10:
             raise ValueError("num_qubits must be at least 10 for meaningful key sifting.")
@@ -119,7 +127,16 @@ class BB84Protocol:
         self.num_qubits = num_qubits
         self.eve_present = eve_present
         self.qber_threshold = qber_threshold
+        self.channel_noise_rate = channel_noise_rate
         self.rng = np.random.default_rng(seed)
+
+        if self.channel_noise_rate < 0.0 or self.channel_noise_rate >= 1.0:
+            raise ValueError("channel_noise_rate must be in [0.0, 1.0).")
+        if self.channel_noise_rate >= self.qber_threshold:
+            raise ValueError(
+                "channel_noise_rate must be strictly less than qber_threshold "
+                "(honest noisy channel stays below intrusion threshold)."
+            )
 
     # ------------------------------------------------------------------ #
     #  Phase 1 – Alice prepares qubits                                    #
@@ -233,6 +250,43 @@ class BB84Protocol:
         return matching_indices, alice_sifted, bob_sifted
 
     # ------------------------------------------------------------------ #
+    #  Post-sifting: imperfect channel (optional)                          #
+    # ------------------------------------------------------------------ #
+    def _apply_channel_noise_to_sifted(self, alice_sifted: list, bob_sifted: list) -> list:
+        """
+        Flip bits on Bob's sifted string to imitate detector/channel errors.
+
+        When Eve is INACTIVE:
+            Exactly k = floor(channel_noise_rate × L) random positions flip, so
+            QBER_after = k/L ≤ channel_noise_rate < qber_threshold.
+
+        When Eve is ACTIVE:
+            Independent Bernoulli(channel_noise_rate) flips stack on attack errors;
+            QBER is not capped (realistic degraded channel plus adversary).
+
+        Requires channel_noise_rate < qber_threshold (enforced at init).
+        """
+        if self.channel_noise_rate <= 0 or not bob_sifted:
+            return list(bob_sifted)
+
+        L = len(bob_sifted)
+        bob_out = list(bob_sifted)
+
+        if not self.eve_present:
+            k = int(np.floor(self.channel_noise_rate * L))
+            if k <= 0:
+                return bob_out
+            idx = self.rng.choice(L, size=k, replace=False)
+            for i in idx:
+                bob_out[int(i)] ^= 1
+            return bob_out
+
+        for i in range(L):
+            if self.rng.random() < self.channel_noise_rate:
+                bob_out[i] ^= 1
+        return bob_out
+
+    # ------------------------------------------------------------------ #
     #  Phase 5 – QBER estimation                                         #
     # ------------------------------------------------------------------ #
     def _calculate_qber(self, alice_sifted, bob_sifted):
@@ -243,8 +297,9 @@ class BB84Protocol:
         QBER = (number of differing bits) / (total sifted bits)
 
         Expected values:
-            Without Eve:  QBER ≈ 0%  (ideal channel, no noise simulated)
-            With Eve:     QBER ≈ 25% (theoretical maximum for intercept-resend)
+            Without Eve, no noise:  QBER ≈ 0%
+            Without Eve + channel noise (model): floor(p·L)/L ≤ p < threshold
+            With Eve:     QBER ≈ 25% (intercept-resend) plus optional extras
 
         Returns:
             qber             : Float in [0.0, 1.0]
@@ -326,6 +381,8 @@ class BB84Protocol:
             alice_bits, alice_bases, bob_bases, bob_results
         )
 
+        bob_sifted = self._apply_channel_noise_to_sifted(alice_sifted, bob_sifted)
+
         # ── Step 5: QBER ──────────────────────────────────────────────
         qber, error_positions = self._calculate_qber(alice_sifted, bob_sifted)
 
@@ -359,4 +416,5 @@ class BB84Protocol:
             sifting_efficiency = round(sifting_efficiency, 4),
             simulation_time_ms = round(simulation_time_ms, 3),
             error_positions    = error_positions,
+            channel_noise_rate = round(self.channel_noise_rate, 6),
         )

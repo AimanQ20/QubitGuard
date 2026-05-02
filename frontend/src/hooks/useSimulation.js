@@ -17,14 +17,20 @@ export function useSimulation() {
   const [sweepData, setSweepData]       = useState(null);
   const [error, setError]               = useState(null);
 
-  const runSimulation = useCallback(async ({ numQubits, evePresent, qberThreshold }) => {
+  const runSimulation = useCallback(async ({
+    numQubits,
+    evePresent,
+    qberThreshold,
+    channelNoiseRate = 0,
+  }) => {
     setLoading(true);
     setError(null);
     try {
       const resp = await axios.post(`${API_BASE}/api/simulate`, {
-        num_qubits:     numQubits,
-        eve_present:    evePresent,
-        qber_threshold: qberThreshold,
+        num_qubits:           numQubits,
+        eve_present:          evePresent,
+        qber_threshold:       qberThreshold,
+        channel_noise_rate: channelNoiseRate,
       });
       setResult(resp.data.data);
       return resp.data.data;
@@ -50,6 +56,8 @@ export function useSimulation() {
     evePresent,
     qubitCounts = [10, 25, 50, 100, 200, 500, 1000],
     runsPerCount = 5,
+    qberThreshold = 0.11,
+    channelNoiseRate = 0,
   }) => {
     setSweepLoading(true);
     try {
@@ -57,6 +65,8 @@ export function useSimulation() {
         qubit_counts: qubitCounts,
         eve_present: evePresent,
         runs_per_count: runsPerCount,
+        qber_threshold: qberThreshold,
+        channel_noise_rate: channelNoiseRate,
       });
       setSweepData(resp.data.data);
       return resp.data.data;

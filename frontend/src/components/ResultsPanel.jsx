@@ -72,6 +72,18 @@ export default function ResultsPanel({ data }) {
           color="text-purple-300"
         />
         <MetricCard
+          label="Channel noise"
+          value={
+            typeof data.channel_noise_rate === "number" && data.channel_noise_rate > 0
+              ? `${(data.channel_noise_rate * 100).toFixed(2)}%`
+              : "OFF"
+          }
+          color={typeof data.channel_noise_rate === "number" && data.channel_noise_rate > 0 ? "text-amber-300" : "text-gray-500"}
+          sub={
+            eveActive ? "Adds random sift errors on Eve runs" : "Honest noisy channel (bounded QBER)"
+          }
+        />
+        <MetricCard
           label="Eve Active"
           value={eveActive ? "YES" : "NO"}
           color={eveActive ? "text-red-400" : "text-gray-400"}

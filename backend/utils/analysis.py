@@ -59,6 +59,8 @@ def run_qber_sweep(
     eve_present: bool = False,
     runs_per_count: int = 5,
     seed_base: int = 42,
+    qber_threshold: float = BB84Protocol.DEFAULT_QBER_THRESHOLD,
+    channel_noise_rate: float = 0.0,
 ) -> List[Dict[str, Any]]:
     """
     Run simulations across a range of qubit counts and aggregate QBER statistics.
@@ -70,6 +72,8 @@ def run_qber_sweep(
         eve_present     : Whether to simulate Eve
         runs_per_count  : Number of runs per qubit count for averaging
         seed_base       : Base seed for reproducibility
+        qber_threshold  : Same as SimulateRequest.qber_threshold
+        channel_noise_rate : Same as SimulateRequest.channel_noise_rate
 
     Returns:
         List of dicts with keys: num_qubits, mean_qber, min_qber, max_qber, std_qber
@@ -85,6 +89,8 @@ def run_qber_sweep(
             proto = BB84Protocol(
                 num_qubits=n,
                 eve_present=eve_present,
+                qber_threshold=qber_threshold,
+                channel_noise_rate=channel_noise_rate,
                 seed=seed_base + run_i * 1000,
             )
             result = proto.run()
@@ -97,6 +103,8 @@ def run_qber_sweep(
             "max_qber"   : round(max(qbers), 4),
             "std_qber"   : round(statistics.stdev(qbers) if len(qbers) > 1 else 0.0, 4),
             "eve_present": eve_present,
+            "channel_noise_rate": channel_noise_rate,
+            "qber_threshold": qber_threshold,
         })
 
     return sweep_results
@@ -114,6 +122,7 @@ def generate_summary_report(result: BB84Result) -> str:
         sep,
         f"  Qubits transmitted      : {result.num_qubits}",
         f"  Eve present             : {'YES ⚠' if result.eve_present else 'NO ✓'}",
+        f"  Channel noise rate      : {result.channel_noise_rate:.2%}",
         f"  Sifted key length       : {result.key_length} bits",
         f"  Sifting efficiency      : {result.sifting_efficiency:.1%}",
         f"  QBER                    : {result.qber:.2%}",
@@ -134,11 +143,19 @@ def generate_summary_report(result: BB84Result) -> str:
             f"  Theoretical expected QBER with intercept-resend: ~25%.",
         ]
     else:
-        lines += [
-            "  No eavesdropper detected.",
-            "  QBER is near 0% — ideal noiseless quantum channel.",
-            "  Alice and Bob may proceed to use the shared key.",
-        ]
+        if result.channel_noise_rate > 0:
+            lines += [
+                "  No eavesdropper detected.",
+                f"  Simulated channel imperfections (noise rate ≈ {result.channel_noise_rate:.2%}).",
+                f"  QBER {result.qber:.2%} remains below intrusion threshold ({result.qber_threshold:.2%}).",
+                "  Alice and Bob may proceed with error correction/privacy amplification in a full system.",
+            ]
+        else:
+            lines += [
+                "  No eavesdropper detected.",
+                "  Ideal noiseless channel — QBER ~0%.",
+                "  Alice and Bob may proceed to use the shared key.",
+            ]
 
     lines += [
         sep,

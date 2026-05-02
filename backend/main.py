@@ -14,7 +14,7 @@ CORS is enabled for local React dev server (http://localhost:3000).
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List
 import sys
 import os
@@ -74,6 +74,15 @@ class SimulateRequest(BaseModel):
         default=None,
         description="Optional random seed for reproducible results.",
     )
+    channel_noise_rate: float = Field(
+        default=0.0,
+        ge=0.0,
+        lt=1.0,
+        description=(
+            "Simulated imperfect channel/detectors: without Eve QBER stays ≤ rate and < threshold; "
+            "with Eve, extra random flips on the sifted key."
+        ),
+    )
 
     @field_validator("num_qubits")
     @classmethod
@@ -81,6 +90,14 @@ class SimulateRequest(BaseModel):
         if v < 10:
             raise ValueError("num_qubits must be at least 10")
         return v
+
+    @model_validator(mode="after")
+    def noise_below_qber_threshold(self):
+        if self.channel_noise_rate >= self.qber_threshold:
+            raise ValueError(
+                "channel_noise_rate must be strictly less than qber_threshold."
+            )
+        return self
 
 
 class SweepRequest(BaseModel):
@@ -91,6 +108,21 @@ class SweepRequest(BaseModel):
     )
     eve_present: bool = Field(default=False)
     runs_per_count: int = Field(default=5, ge=1, le=20)
+    qber_threshold: float = Field(default=0.11, ge=0.0, le=1.0)
+    channel_noise_rate: float = Field(
+        default=0.0,
+        ge=0.0,
+        lt=1.0,
+        description="Same semantics as SimulateRequest.channel_noise_rate.",
+    )
+
+    @model_validator(mode="after")
+    def sweep_noise_below_threshold(self):
+        if self.channel_noise_rate >= self.qber_threshold:
+            raise ValueError(
+                "channel_noise_rate must be strictly less than qber_threshold."
+            )
+        return self
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
@@ -124,6 +156,7 @@ def simulate(req: SimulateRequest):
             eve_present=req.eve_present,
             qber_threshold=req.qber_threshold,
             seed=req.seed,
+            channel_noise_rate=req.channel_noise_rate,
         )
         result = protocol.run()
         result_dict = result_to_dict(result)
@@ -184,6 +217,8 @@ def qber_sweep(req: SweepRequest):
             qubit_counts=counts,
             eve_present=req.eve_present,
             runs_per_count=req.runs_per_count,
+            qber_threshold=req.qber_threshold,
+            channel_noise_rate=req.channel_noise_rate,
         )
         return {"success": True, "data": sweep_data}
     except HTTPException:
