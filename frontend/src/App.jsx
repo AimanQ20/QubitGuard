@@ -84,11 +84,14 @@ export default function App() {
   const [evePresent,     setEvePresent]     = useState(false);
   const [qberThreshold,  setQberThreshold]  = useState(0.11);
   const [activeTab,      setActiveTab]      = useState("simulate");
-  const [sweepEve,       setSweepEve]       = useState(false);
+  const [sweepCountsInput, setSweepCountsInput] = useState("10, 25, 50, 100, 200, 500, 1000");
+  const [sweepRuns, setSweepRuns] = useState(5);
+  const [analysisThreshold, setAnalysisThreshold] = useState(0.11);
+  const [analysisError, setAnalysisError] = useState(null);
 
   const {
     loading, sweepLoading,
-    result, history, sweepData, error,
+    result, history, error,
     runSimulation, fetchHistory, runSweep, clearHistory,
   } = useSimulation();
 
@@ -101,23 +104,79 @@ export default function App() {
   const [sweepNoEve,   setSweepNoEve]   = useState(null);
   const [sweepWithEve, setSweepWithEve] = useState(null);
 
-  const handleRunSweep = async () => {
-    // Always fetch both series for comparison
-    const resp_no = await fetch("/api/sweep", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ qubit_counts: [10, 25, 50, 100, 200, 500, 1000], eve_present: false, runs_per_count: 5 }),
-    });
-    const resp_eve = await fetch("/api/sweep", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ qubit_counts: [10, 25, 50, 100, 200, 500, 1000], eve_present: true, runs_per_count: 5 }),
-    });
-    const j1 = await resp_no.json();
-    const j2 = await resp_eve.json();
-    setSweepNoEve(j1.data);
-    setSweepWithEve(j2.data);
+  const parseSweepCounts = () => {
+    const parsed = sweepCountsInput
+      .split(",")
+      .map(v => Number(v.trim()))
+      .filter(v => Number.isInteger(v) && v >= 10 && v <= 10000);
+
+    return [...new Set(parsed)].sort((a, b) => a - b);
   };
+
+  const handleRunSweep = async () => {
+    setAnalysisError(null);
+    const counts = parseSweepCounts();
+    if (!counts.length) {
+      setAnalysisError("Enter valid qubit counts (integers between 10 and 10000).");
+      return;
+    }
+
+    const noEve = await runSweep({
+      evePresent: false,
+      qubitCounts: counts,
+      runsPerCount: sweepRuns,
+    });
+    if (!noEve) {
+      setAnalysisError("No-Eve sweep failed. Check backend logs and try again.");
+      return;
+    }
+
+    const withEve = await runSweep({
+      evePresent: true,
+      qubitCounts: counts,
+      runsPerCount: sweepRuns,
+    });
+    if (!withEve) {
+      setAnalysisError("With-Eve sweep failed. Check backend logs and try again.");
+      return;
+    }
+
+    setSweepNoEve(noEve);
+    setSweepWithEve(withEve);
+  };
+
+  const exportSweepCsv = () => {
+    if (!sweepNoEve || !sweepWithEve) return;
+
+    const withEveMap = new Map(sweepWithEve.map(d => [d.num_qubits, d]));
+    const rows = sweepNoEve.map(no => {
+      const yes = withEveMap.get(no.num_qubits) || {};
+      return [
+        no.num_qubits,
+        no.mean_qber, no.std_qber, no.min_qber, no.max_qber,
+        yes.mean_qber ?? "", yes.std_qber ?? "", yes.min_qber ?? "", yes.max_qber ?? "",
+      ].join(",");
+    });
+
+    const csv = [
+      "num_qubits,no_eve_mean,no_eve_std,no_eve_min,no_eve_max,with_eve_mean,with_eve_std,with_eve_min,with_eve_max",
+      ...rows,
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `qber_sweep_runs${sweepRuns}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const withEveAboveThreshold = sweepWithEve
+    ? sweepWithEve.filter(p => p.mean_qber > analysisThreshold).length
+    : 0;
 
   const handleSimulate = async () => {
     const res = await runSimulation({ numQubits, evePresent, qberThreshold });
@@ -294,23 +353,23 @@ export default function App() {
                 <div className="mt-4 rounded-xl bg-gray-950/60 border border-gray-700/30 p-4 overflow-x-auto">
                   <pre className="text-[10px] text-gray-400 leading-5 font-mono">
 {`┌─────────────────────────────────────────────────────────────────┐
-│                    BB84 DATA FLOW                               │
-├──────────────┬──────────────────┬──────────────────────────────┤
-│    ALICE     │  QUANTUM CHANNEL │   BOB                        │
-│              │                  │                              │
-│ gen bits[]   │                  │                              │
-│ gen bases[]  │                  │                              │
-│ encode       │ ─── qubits ───▶  │                              │
-│ qubits       │${evePresent ? " ◀── EVE ────▶ " : "                  "}│ gen bases[]  │
-│              │                  │ measure      │
-│              │                  │ qubits       │
-│              │                  │              │
-│         ◀════╪══ Classical Channel ═════════▶  │
-│              │  (public: bases only)            │
-│              │                  │              │
-│ sift_key()   │                  │ sift_key()   │
-│              │                  │              │
-│ QBER check → intrusion detection → key accept/reject          │
+│                         BB84 DATA FLOW                        │
+├──────────────┬───────────────────────┬──────────────────────────┤
+│    ALICE     │    QUANTUM CHANNEL   │           BOB           │
+│              │                      │                         │
+│ gen bits[]   │                      │                         │
+│ gen bases[]  │                      │                         │
+│ encode       │ ────── qubits ─────▶ │                         │
+│ qubits       │${evePresent ? " ◀─────── EVE ───────▶" : "                      "}│ gen bases[]             │
+│              │                      │ measure                 │
+│              │                      │ qubits                  │
+│              │                      │                         │
+│◀════════════════════   Classical Channel  ════════════════════▶│     
+│              │ (public: bases only) │                         │
+│              │                      │                         │
+│ sift_key()   │                      │ sift_key()              │
+│              │                      │                         │
+│ QBER check -> intrusion detection -> key accept/reject        │
 └─────────────────────────────────────────────────────────────────┘`}
                   </pre>
                 </div>
@@ -356,20 +415,77 @@ export default function App() {
           <div className="space-y-6">
             <Section title="QBER vs Qubit Count Analysis" icon="📈">
               <p className="text-xs text-gray-500 mb-4 leading-relaxed">
-                This sweep runs {7 * 5} simulations (7 qubit counts × 5 runs each) for both with-Eve and without-Eve scenarios,
-                then plots the mean QBER. Without Eve, QBER stays near 0%. With Eve's intercept-resend attack, QBER converges to ~25%.
-                The 11% threshold line shows where intrusion detection triggers.
+                Configure your sweep below. For each qubit count, the simulator runs multiple trials and plots
+                the mean QBER for both scenarios. Tooltip values include variability stats (std and min/max range).
               </p>
-              <div className="mb-4">
+              <div className="mb-4 grid grid-cols-1 lg:grid-cols-3 gap-3">
+                <div className="lg:col-span-2">
+                  <label className="text-xs text-gray-400 block mb-1">Qubit counts (comma-separated)</label>
+                  <input
+                    value={sweepCountsInput}
+                    onChange={e => setSweepCountsInput(e.target.value)}
+                    placeholder="10, 25, 50, 100, 200, 500, 1000"
+                    className="w-full rounded-lg bg-gray-900 border border-gray-700/60 px-3 py-2 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                  />
+                </div>
+                <SliderInput
+                  label="Runs Per Count"
+                  value={sweepRuns}
+                  onChange={setSweepRuns}
+                  min={1}
+                  max={20}
+                  step={1}
+                />
+                <SliderInput
+                  label="Detection Threshold (Chart)"
+                  value={analysisThreshold}
+                  onChange={setAnalysisThreshold}
+                  min={0.01}
+                  max={0.3}
+                  step={0.01}
+                  format={v => `${(v * 100).toFixed(0)}%`}
+                />
+              </div>
+              <div className="mb-4 flex flex-wrap gap-2">
                 <button
                   onClick={handleRunSweep}
                   disabled={sweepLoading}
                   className="px-5 py-2.5 rounded-xl text-sm font-semibold bg-indigo-700/60 hover:bg-indigo-600/60 border border-indigo-500/40 transition-all disabled:opacity-50"
                 >
-                  {sweepLoading ? "Running sweep…" : "▶ Run Sweep Analysis (Both Scenarios)"}
+                  {sweepLoading ? "Running sweep..." : "▶ Run Sweep Analysis (Both Scenarios)"}
+                </button>
+                <button
+                  onClick={exportSweepCsv}
+                  disabled={!sweepNoEve || !sweepWithEve}
+                  className="px-4 py-2.5 rounded-xl text-sm font-semibold bg-gray-800/60 hover:bg-gray-700/60 border border-gray-600/40 transition-all disabled:opacity-50"
+                >
+                  Export CSV
                 </button>
               </div>
-              <QBERChart sweepData={sweepNoEve} sweepWithEve={sweepWithEve} />
+              {analysisError && (
+                <p className="text-xs text-red-400 mb-2">{analysisError}</p>
+              )}
+              <QBERChart
+                sweepData={sweepNoEve}
+                sweepWithEve={sweepWithEve}
+                threshold={analysisThreshold}
+              />
+              {sweepNoEve && sweepWithEve && (
+                <div className="mt-3 text-[11px] text-gray-400 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="rounded-lg border border-gray-700/40 bg-gray-900/40 p-2">
+                    Sweep points: <span className="text-cyan-300 font-bold">{sweepNoEve.length}</span>
+                  </div>
+                  <div className="rounded-lg border border-gray-700/40 bg-gray-900/40 p-2">
+                    Runs per point: <span className="text-cyan-300 font-bold">{sweepRuns}</span>
+                  </div>
+                  <div className="rounded-lg border border-gray-700/40 bg-gray-900/40 p-2">
+                    With-Eve points above threshold:{" "}
+                    <span className="text-amber-300 font-bold">
+                      {withEveAboveThreshold}/{sweepWithEve.length}
+                    </span>
+                  </div>
+                </div>
+              )}
             </Section>
 
             <Section title="Security & Performance Analysis" icon="⚙">

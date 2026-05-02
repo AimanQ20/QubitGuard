@@ -17,15 +17,21 @@ const CustomTooltip = ({ active, payload, label }) => {
     <div className="bg-gray-900 border border-gray-600 rounded-lg p-3 text-xs shadow-xl">
       <p className="text-gray-300 font-bold mb-1">{label} qubits</p>
       {payload.map(p => (
-        <p key={p.name} style={{ color: p.color }}>
-          {p.name}: {(p.value * 100).toFixed(1)}%
-        </p>
-      ))}
+        <div key={p.name} style={{ color: p.color }} className="mb-1">
+          <p>{p.name}: {(p.value * 100).toFixed(1)}%</p>
+          {typeof p.payload?.[`${p.name}_std`] === "number" && (
+            <p className="text-[10px] opacity-85">
+              std {(p.payload[`${p.name}_std`] * 100).toFixed(1)}% ·
+              range {(p.payload[`${p.name}_min`] * 100).toFixed(1)}%-{(p.payload[`${p.name}_max`] * 100).toFixed(1)}%
+            </p>
+          )}
+        </div>
+      )).filter(Boolean)}
     </div>
   );
 };
 
-export default function QBERChart({ sweepData, sweepWithEve }) {
+export default function QBERChart({ sweepData, sweepWithEve, threshold = 0.11 }) {
   if (!sweepData && !sweepWithEve) {
     return (
       <div className="flex items-center justify-center h-48 text-gray-500 text-sm border border-gray-700/40 rounded-lg bg-gray-800/20">
@@ -38,12 +44,26 @@ export default function QBERChart({ sweepData, sweepWithEve }) {
   const mergedMap = {};
   if (sweepData) {
     sweepData.forEach(d => {
-      mergedMap[d.num_qubits] = { ...mergedMap[d.num_qubits], num_qubits: d.num_qubits, no_eve: d.mean_qber };
+      mergedMap[d.num_qubits] = {
+        ...mergedMap[d.num_qubits],
+        num_qubits: d.num_qubits,
+        no_eve: d.mean_qber,
+        no_eve_std: d.std_qber,
+        no_eve_min: d.min_qber,
+        no_eve_max: d.max_qber,
+      };
     });
   }
   if (sweepWithEve) {
     sweepWithEve.forEach(d => {
-      mergedMap[d.num_qubits] = { ...mergedMap[d.num_qubits], num_qubits: d.num_qubits, with_eve: d.mean_qber };
+      mergedMap[d.num_qubits] = {
+        ...mergedMap[d.num_qubits],
+        num_qubits: d.num_qubits,
+        with_eve: d.mean_qber,
+        with_eve_std: d.std_qber,
+        with_eve_min: d.min_qber,
+        with_eve_max: d.max_qber,
+      };
     });
   }
   const chartData = Object.values(mergedMap).sort((a, b) => a.num_qubits - b.num_qubits);
@@ -75,10 +95,10 @@ export default function QBERChart({ sweepData, sweepWithEve }) {
           />
           {/* Security threshold line */}
           <ReferenceLine
-            y={0.11}
+            y={threshold}
             stroke="#f59e0b"
             strokeDasharray="5 3"
-            label={{ value: "11% threshold", fill: "#f59e0b", fontSize: 10, position: "insideTopRight" }}
+            label={{ value: `${(threshold * 100).toFixed(0)}% threshold`, fill: "#f59e0b", fontSize: 10, position: "insideTopRight" }}
           />
           {sweepData && (
             <Line
@@ -105,7 +125,7 @@ export default function QBERChart({ sweepData, sweepWithEve }) {
         </LineChart>
       </ResponsiveContainer>
       <p className="text-[10px] text-gray-500 text-center mt-1">
-        Yellow dashed line = 11% QBER security threshold. Above → attack detected.
+        Yellow dashed line = {(threshold * 100).toFixed(0)}% QBER security threshold. Above -> attack detected.
       </p>
     </div>
   );

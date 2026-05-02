@@ -46,17 +46,24 @@ export function useSimulation() {
     }
   }, []);
 
-  const runSweep = useCallback(async (evePresent) => {
+  const runSweep = useCallback(async ({
+    evePresent,
+    qubitCounts = [10, 25, 50, 100, 200, 500, 1000],
+    runsPerCount = 5,
+  }) => {
     setSweepLoading(true);
     try {
       const resp = await axios.post(`${API_BASE}/api/sweep`, {
-        qubit_counts: [10, 25, 50, 100, 200, 500, 1000],
+        qubit_counts: qubitCounts,
         eve_present: evePresent,
-        runs_per_count: 5,
+        runs_per_count: runsPerCount,
       });
       setSweepData(resp.data.data);
+      return resp.data.data;
     } catch (err) {
-      console.error("Sweep failed:", err.message);
+      const msg = err.response?.data?.detail || err.message || "Sweep request failed";
+      setError(msg);
+      return null;
     } finally {
       setSweepLoading(false);
     }
